@@ -5,8 +5,10 @@
 #include "message_stream_decoder.hpp"
 #include <boost/asio/ip/tcp.hpp>
 #include <array>
+#include <atomic>
 #include <deque>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -59,10 +61,13 @@ private:
     void read_stream();
     void on_stream_bytes(ErrorCode error, std::size_t transferred);
     void dispatch_message(const DecodedMessage& message);
+    void on_send(DataBuffer& frame);
+    void release_queued_bytes(std::size_t count);
     void write_next();
     void on_write(ErrorCode error, std::size_t transferred);
 
     boost::asio::ip::tcp::socket socket_;
+    const boost::asio::ip::tcp::socket::executor_type executor_;
     std::weak_ptr<RawTcpEvents> events_;
     std::weak_ptr<ConnectionOwner> owner_;
     std::weak_ptr<TcpConnection> connection_;
@@ -73,8 +78,10 @@ private:
     std::array<unsigned char, 4> header_{};
     std::vector<std::uint8_t> incoming_;
     std::deque<DataBuffer> writes_;
+    // Includes frames posted to the executor and frames awaiting write completion.
+    std::mutex send_mutex_;
     std::size_t queued_bytes_ = 0;
-    bool closed_ = false;
+    std::atomic<bool> closed_ = false;
 };
 
 } // namespace tcp_helper::detail

@@ -474,7 +474,11 @@ TEST_F(TypedTcpTest, DestroyingServerDuringFirstDisconnectStillNotifiesEveryConn
             return events->senders.size() == 2;
         }));
     owner->stop();
-    EXPECT_FALSE(owner);
+    ASSERT_TRUE(until(
+        [&owner]
+        {
+            return !owner;
+        }));
     EXPECT_EQ(events->disconnects.size(), 2);
     EXPECT_FALSE(events->senders[0]->is_open());
     EXPECT_FALSE(events->senders[1]->is_open());

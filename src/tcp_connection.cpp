@@ -1,4 +1,5 @@
 #include "connection_state.hpp"
+#include <boost/asio/post.hpp>
 #include <boost/asio/read.hpp>
 #include <boost/asio/write.hpp>
 #include <boost/endian/conversion.hpp>
@@ -16,8 +17,8 @@ std::atomic<std::uint64_t> next_connection_id{1};
 ConnectionState::ConnectionState(boost::asio::ip::tcp::socket socket, std::weak_ptr<RawTcpEvents> events,
                                  TcpOptions options, std::weak_ptr<ConnectionOwner> owner,
                                  std::shared_ptr<TypedEventsAdapter> typed_events)
-    : socket_(std::move(socket)), events_(std::move(events)), owner_(std::move(owner)), options_(options),
-      typed_events_(typed_events)
+    : socket_(std::move(socket)), executor_(socket_.get_executor()), events_(std::move(events)),
+      owner_(std::move(owner)), options_(options), typed_events_(typed_events)
 {
     if (typed_events)
     {
@@ -65,20 +66,26 @@ bool ConnectionState::send(DataBuffer message)
         return false;
     }
     const auto frame_size = message.size() + header_.size();
-    if (frame_size > options_.max_queued_bytes - queued_bytes_)
-    {
-        return false;
-    }
-
     DataBuffer frame;
     frame.reserve(frame_size);
     frame.write_uint32(static_cast<std::uint32_t>(message.size()));
     frame.write_bytes(message.bytes());
-    writes_.push_back(std::move(frame));
-    queued_bytes_ += frame_size;
-    if (writes_.size() == 1)
+
+    auto guard = std::lock_guard(send_mutex_);
+    if (closed_ || frame_size > options_.max_queued_bytes - queued_bytes_)
     {
-        write_next();
+        return false;
+    }
+    queued_bytes_ += frame_size;
+    try
+    {
+        // Serialize submissions and reserve capacity before the TCP thread can consume them.
+        boost::asio::post(executor_, std::bind(&ConnectionState::on_send, shared_from_this(), std::move(frame)));
+    }
+    catch (...)
+    {
+        queued_bytes_ -= frame_size;
+        throw;
     }
     return true;
 }
@@ -224,6 +231,35 @@ void ConnectionState::deliver_message()
     }
 }
 
+void ConnectionState::on_send(DataBuffer& frame)
+{
+    if (closed_)
+    {
+        release_queued_bytes(frame.size());
+        return;
+    }
+    const auto frame_size = frame.size();
+    try
+    {
+        writes_.push_back(std::move(frame));
+    }
+    catch (...)
+    {
+        release_queued_bytes(frame_size);
+        throw;
+    }
+    if (writes_.size() == 1)
+    {
+        write_next();
+    }
+}
+
+void ConnectionState::release_queued_bytes(std::size_t count)
+{
+    auto guard = std::lock_guard(send_mutex_);
+    queued_bytes_ -= count;
+}
+
 void ConnectionState::write_next()
 {
     boost::asio::async_write(
@@ -235,15 +271,20 @@ void ConnectionState::on_write(ErrorCode error, std::size_t)
 {
     if (closed_ || error)
     {
+        std::size_t discarded_bytes = 0;
+        for (const auto& frame : writes_)
+        {
+            discarded_bytes += frame.size();
+        }
         writes_.clear();
-        queued_bytes_ = 0;
+        release_queued_bytes(discarded_bytes);
         if (!closed_)
         {
             close(error);
         }
         return;
     }
-    queued_bytes_ -= writes_.front().size();
+    release_queued_bytes(writes_.front().size());
     writes_.pop_front();
     if (!writes_.empty())
     {

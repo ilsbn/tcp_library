@@ -38,6 +38,7 @@ def main():
     reader = threading.Thread(target=collect_lines, args=(server.stdout, lines, output), daemon=True)
     reader.start()
     try:
+        exits_on_disconnect = False
         while True:
             try:
                 line = lines.get(timeout=5)
@@ -47,6 +48,11 @@ def main():
                 raise RuntimeError("server exited before accepting a client:\n" + "".join(output))
             if line.startswith("LISTENING "):
                 port = line.split()[1]
+                exits_on_disconnect = True
+                break
+            started = re.search(r"Main: TCP server started on .+:(\d+)", line)
+            if started:
+                port = started.group(1)
                 break
 
         client = subprocess.run(
@@ -57,8 +63,22 @@ def main():
         print(client.stderr, end="", file=sys.stderr)
         if client.returncode != 0:
             raise RuntimeError(f"client failed: {client.returncode}")
-        if server.wait(timeout=5) != 0:
-            raise RuntimeError("server failed")
+        if exits_on_disconnect:
+            if server.wait(timeout=5) != 0:
+                raise RuntimeError("server failed")
+        else:
+            # The manually configured server keeps running after a client disconnects.
+            while True:
+                try:
+                    line = lines.get(timeout=5)
+                except queue.Empty:
+                    raise RuntimeError("server did not report client disconnection") from None
+                if line is None:
+                    raise RuntimeError("server exited before reporting client disconnection")
+                if "TCP: client disconnected" in line:
+                    break
+            server.terminate()
+            server.wait(timeout=3)
         reader.join(timeout=2)
         server_output = "".join(output)
         print(server_output, end="")
@@ -75,7 +95,7 @@ def main():
         )
         if refused.returncode != 1 or "connect" not in refused.stdout + refused.stderr:
             raise RuntimeError("client did not report the closed server's connection error")
-        print("Separate demos exchanged both message types, kept TCP off the main thread, and shut down cleanly")
+        print("Separate demos exchanged both message types, kept TCP off the main thread, and reported disconnection")
     finally:
         if server.poll() is None:
             server.terminate()

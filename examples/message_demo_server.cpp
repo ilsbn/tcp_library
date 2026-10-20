@@ -14,13 +14,14 @@ public:
     {
         auto guard = std::lock_guard<std::mutex>(connection_.mutex_);
         spdlog::info("TCP: client connected");
-        connection_.online_ = true;
         connection_.client_ = std::move(client);
         connection_.data_ = TcpDataCollection();
     }
     void on_heartbeat(tcp_helper::MessageSenderPtr sender, const tcp_helper::Heartbeat& message) override
     {
         auto guard = std::lock_guard<std::mutex>(connection_.mutex_);
+        connection_.online_ = true;
+
         if (sender == connection_.client_)
         {
             spdlog::info("TCP: received Heartbeat");
@@ -67,17 +68,13 @@ private:
 };
 } // namespace
 
-int main(int argc, char* argv[])
+int main()
 {
     try
     {
-        if (argc > 3 || (argc == 3 && std::string_view(argv[2]) != "--once"))
-        {
-            std::cerr << "Usage: tcp_message_demo_server [port=10101] [--once]\n";
-            return 2;
-        }
-        const auto server_port = argc > 1 ? parse_port(argv[1], true) : std::uint16_t{10101};
-        const bool once = argc == 3;
+        const std::string server_address = "127.0.0.1";
+        const auto server_port = std::uint16_t{10101};
+
         spdlog::set_pattern("[%H:%M:%S.%e] [thread %t] [%l] %v");
 
         // The TCP library uses one event thread; the main thread runs application logic.
@@ -85,17 +82,14 @@ int main(int argc, char* argv[])
         auto server_events_ = std::make_shared<ServerEventHandler>();
         tcp_helper::TcpServer server_(*context.context(), server_events_);
         TcpSession session(context, server_);
-        const std::string server_address = "127.0.0.1";
-        const auto result =
-            context.invoke(std::bind(&tcp_helper::TcpServer::start, &server_, server_address, server_port));
-        if (result)
+
+        if (const auto result = server_.start(server_address, server_port); result.failed())
         {
             spdlog::error("Failed to start server: {}", result.message());
             return EXIT_FAILURE;
         }
-        const auto listening_port = context.invoke(std::bind(&tcp_helper::TcpServer::port, &server_));
-        std::cout << "LISTENING " << listening_port << std::endl;
-        spdlog::info("Main: TCP server started on {}:{}", server_address, listening_port);
+
+        spdlog::info("Main: TCP server started on {}:{}", server_address, server_.port());
 
         auto last_heartbeat = std::chrono::steady_clock::time_point();
         tcp_helper::SequenceNumber sequence = 0;
@@ -103,26 +97,33 @@ int main(int argc, char* argv[])
         {
             const auto current = std::chrono::steady_clock::now();
             auto tcp_ = server_events_->fetch();
-            if (tcp_.error_)
+
+            if (tcp_.online_ && tcp_.client_)
             {
-                return EXIT_FAILURE;
+                for (const auto& heartbeat : tcp_.data_.m_heartbeats)
+                {
+                    spdlog::info("Main: server received Heartbeat: sequence={}, login={}", heartbeat.m_sequence_number, heartbeat.m_user_identifier.m_login_name);
+                }
+                for (const auto& cart : tcp_.data_.m_carts)
+                {
+                    spdlog::info("Main: server received ShoppingCart: login={}, items={}", cart.m_user_identifier.m_login_name, cart.m_items.size());
+                    if (!tcp_.client_->send(cart))
+                    {
+                        spdlog::error("Could not queue ShoppingCart");
+                        return EXIT_FAILURE;
+                    }
+                }
+                if (current >= last_heartbeat + std::chrono::seconds(1))
+                {
+                    if (!tcp_.client_->send(tcp_helper::Heartbeat{++sequence, {"server", 2}}))
+                    {
+                        spdlog::error("Could not queue Heartbeat");
+                        return EXIT_FAILURE;
+                    }
+                    last_heartbeat = current;
+                }
             }
-            for (const auto& heartbeat : tcp_.data_.m_heartbeats)
-            {
-                spdlog::info("Main: server received Heartbeat: sequence={}, login={}", heartbeat.m_sequence_number,
-                             heartbeat.m_user_identifier.m_login_name);
-            }
-            for (const auto& cart : tcp_.data_.m_carts)
-            {
-                spdlog::info("Main: server received ShoppingCart: login={}, items={}",
-                             cart.m_user_identifier.m_login_name, cart.m_items.size());
-                context.send_cart(tcp_.client_, cart);
-            }
-            if (tcp_.online_ && tcp_.client_ && current >= last_heartbeat + std::chrono::seconds(1))
-            {
-                context.send_heartbeat(tcp_.client_, tcp_helper::Heartbeat{++sequence, {"server", 2}});
-                last_heartbeat = current;
-            }
+
             // Put application logic here; callbacks collect messages while this thread works.
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }

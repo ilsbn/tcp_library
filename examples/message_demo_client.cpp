@@ -72,11 +72,11 @@ int main(int argc, char* argv[])
         const bool once = argc == 4;
         spdlog::set_pattern("[%H:%M:%S.%e] [thread %t] [%l] %v");
 
-        AsioContext context(1);
+        AsioContext context(2);
         auto client_events_ = std::make_shared<ClientEventHandler>();
         tcp_helper::TcpClient client_(*context.context(), client_events_);
         TcpSession session(context, client_);
-        context.invoke(std::bind(&tcp_helper::TcpClient::connect, &client_, server_address, server_port));
+        client_.connect(server_address, server_port);
         spdlog::info("Main: connecting to {}:{}", server_address, server_port);
 
         const tcp_helper::ShoppingCart cart{{"alice", 42}, {{10001, 12.50F}, {10002, 3.25F}}};
@@ -124,12 +124,20 @@ int main(int argc, char* argv[])
             {
                 if (!cart_sent)
                 {
-                    context.send_cart(tcp_.client_, cart);
+                    if (!tcp_.client_->send(cart))
+                    {
+                        spdlog::error("Could not queue ShoppingCart");
+                        return EXIT_FAILURE;
+                    }
                     cart_sent = true;
                 }
                 if (current >= last_heartbeat + std::chrono::seconds(1))
                 {
-                    context.send_heartbeat(tcp_.client_, tcp_helper::Heartbeat{++sequence, {"alice", 42}});
+                    if (!tcp_.client_->send(tcp_helper::Heartbeat{++sequence, {"alice", 42}}))
+                    {
+                        spdlog::error("Could not queue Heartbeat");
+                        return EXIT_FAILURE;
+                    }
                     last_heartbeat = current;
                 }
             }

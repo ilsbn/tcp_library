@@ -8,12 +8,9 @@
 #include <atomic>
 #include <csignal>
 #include <functional>
-#include <future>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
-#include <type_traits>
-#include <utility>
 #include <vector>
 
 using SharedIoContext = std::shared_ptr<boost::asio::io_context>;
@@ -45,6 +42,7 @@ public:
             throw;
         }
     }
+
     ~AsioContext()
     {
         io_context_->stop();
@@ -55,34 +53,16 @@ public:
     {
         return io_context_;
     }
+
     bool stop_requested() const
     {
         return stop_requested_.load();
     }
-    template <typename F> void post(F&& function)
-    {
-        boost::asio::post(*io_context_, std::forward<F>(function));
-    }
-    // Use for setup and shutdown that must finish before the main thread continues.
-    template <typename F> auto invoke(F&& function)
-    {
-        std::packaged_task<std::invoke_result_t<F>()> task(std::forward<F>(function));
-        auto result = task.get_future();
-        post(std::move(task));
-        return result.get();
-    }
-    void send_heartbeat(tcp_helper::MessageSenderPtr sender, tcp_helper::Heartbeat message)
-    {
-        post(std::bind(&AsioContext::on_send_heartbeat, std::move(sender), std::move(message)));
-    }
-    void send_cart(tcp_helper::MessageSenderPtr sender, tcp_helper::ShoppingCart message)
-    {
-        post(std::bind(&AsioContext::on_send_cart, std::move(sender), std::move(message)));
-    }
+
     // Stop the client/server first, then drain their cancellations before destroying them.
     void finish()
     {
-        post(std::bind(&AsioContext::cancel_signals, this));
+        boost::asio::post(*io_context_, std::bind(&AsioContext::cancel_signals, this));
         work_guard_.reset();
         join_threads();
     }
@@ -114,23 +94,6 @@ private:
     {
         signals_.cancel();
     }
-    static void on_send_heartbeat(const tcp_helper::MessageSenderPtr& sender, const tcp_helper::Heartbeat& message)
-    {
-        if (sender && sender->is_open() && !sender->send(message))
-        {
-            spdlog::error("Could not queue Heartbeat");
-            sender->close();
-        }
-    }
-    static void on_send_cart(const tcp_helper::MessageSenderPtr& sender, const tcp_helper::ShoppingCart& message)
-    {
-        if (sender && sender->is_open() && !sender->send(message))
-        {
-            spdlog::error("Could not queue ShoppingCart");
-            sender->close();
-        }
-    }
-
     SharedIoContext io_context_;
     using work_guard_type = boost::asio::executor_work_guard<boost::asio::io_context::executor_type>;
     work_guard_type work_guard_;
@@ -150,8 +113,7 @@ struct TcpConnection
     TcpConnection() = default;
     // fetch() holds the source mutex while copying the connection snapshot.
     TcpConnection(const TcpConnection& value)
-        : online_(value.online_), client_(value.client_), data_(value.data_),
-          error_(value.error_)
+        : online_(value.online_), client_(value.client_), data_(value.data_), error_(value.error_)
     {
     }
 
@@ -171,7 +133,7 @@ public:
     }
     ~TcpSession()
     {
-        context_.invoke(std::bind(&Transport::stop, &transport_));
+        transport_.stop();
         context_.finish();
     }
     TcpSession(const TcpSession&) = delete;

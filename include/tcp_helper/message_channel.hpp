@@ -8,8 +8,9 @@
 namespace tcp_helper
 {
 
-// Use on the owning transport's event thread. True means queued for delivery.
+// send() and is_open() may be called from any thread. True means queued for delivery.
 // False means closed or transport limits exceeded. Encoding/allocation errors may throw.
+// close() uses the owning transport's event thread, or runs before/after that thread.
 class IMessageSender
 {
 public:

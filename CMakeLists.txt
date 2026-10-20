@@ -59,6 +59,7 @@ if(BUILD_TESTING)
         tests/messages_tests.cpp
         tests/tcp_tests.cpp
         tests/typed_tcp_tests.cpp
+        tests/threaded_send_tests.cpp
         tests/message_channel_tests.cpp
         tests/diagnostics_tests.cpp
         tests/stream_decoder_tests.cpp

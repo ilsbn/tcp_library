@@ -1,6 +1,7 @@
 #include <tcp_helper/tcp.hpp>
 #include <tcp_helper/messages.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/post.hpp>
 #include <boost/asio/write.hpp>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -426,7 +427,13 @@ TEST_F(TcpTest, ClosingDuringWriteKeepsPendingBuffersAlive)
     ASSERT_TRUE(connect());
     auto connection = client_events->connections.front();
     ASSERT_TRUE(connection->send(DataBuffer{std::vector<std::uint8_t>(1024 * 1024, 'x')}));
-    connection->close();
+    // Start the first posted write before closing, with another submission still pending.
+    boost::asio::post(context,
+                      [connection]
+                      {
+                          connection->close();
+                      });
+    ASSERT_TRUE(connection->send(make_message("pending")));
     ASSERT_TRUE(until(
         [this]
         {

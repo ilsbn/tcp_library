@@ -73,7 +73,7 @@ The free functions `encode_message()` and `decode_message()` in [messages.cpp](.
 ## A message travelling between peers
 
 1. The application calls `sender->send(heartbeat)` or `sender->send(cart)`. `TcpConnection` encodes the object, header, and CRC-32 into a `DataBuffer`.
-2. `ConnectionState` adds the frame length, queues the bytes, and writes them through Boost.Asio. `send()` returns true when queued, or false when closed or a transport limit is exceeded.
+2. `ConnectionState` adds the frame length and reserves queue capacity under a mutex before posting the owned bytes to the TCP thread. Only that thread touches the socket and active write buffers. `send()` returns true when queued, or false when closed or a transport limit is exceeded. Reserved capacity includes posted messages and active writes, and is released on write completion or cancellation.
 3. The receiving `ConnectionState` feeds read chunks to `MessageStreamDecoder`, independently of how TCP splits or combines reads.
 4. Validated messages reach `TypedEventsAdapter`, which calls `on_heartbeat()` or `on_shopping_cart()`. Invalid data goes to the injected `IMessageErrorLogger`; the connection stays open and the decoder searches for another valid magic/header/CRC/payload candidate.
 
@@ -92,7 +92,7 @@ A corrupt frame length can be recovered using the existing message header. The d
 - Retain the application handler while callbacks are wanted. The adapter holds it weakly, preventing ownership cycles.
 - `TcpConnection` owns its state. State references back to the connection, owner, and observer are weak. Pending asynchronous operations retain state and its buffers until completion.
 - Callback message references last for that callback; copy messages to keep them.
-- Use one `io_context` thread. Callbacks must return promptly and must not throw. Closing can invoke disconnect callbacks immediately.
+- Use one `io_context` thread. Sender `send()`/`is_open()`, client `connect()`/`stop()`, and server `stop()` are thread-safe. Connect and stop dispatch transport work internally, executing inline when already on the TCP thread. An off-thread stop returns before cancellation finishes. Server setup remains synchronous and must not overlap other lifecycle calls; sender `close()` uses the TCP thread, or runs before/after it. Callbacks must return promptly and must not throw. Closing can invoke disconnect callbacks immediately.
 - Stop clients/servers and drain cancellations during shutdown. Destroy all transport objects and retained senders before destroying the context.
 
 ## Raw byte access
@@ -101,4 +101,4 @@ A corrupt frame length can be recovered using the existing message header. The d
 
 For a complete exchange in separate processes, see [message_demo_server.cpp](../examples/message_demo_server.cpp) and [message_demo_client.cpp](../examples/message_demo_client.cpp). Both keep the application's `AsioContext`, `TcpDataCollection`, `TcpConnection` snapshot, and `fetch()` polling pattern. Callbacks collect messages under a mutex; the main thread fetches and processes copies. Both peers send periodic Heartbeats, and the client sends a ShoppingCart for the server to echo.
 
-The shared [message_demo_common.hpp](../examples/message_demo_common.hpp) owns the context work guard and background threads. Each demo uses one TCP thread, posts all sends to it, and continues application logic in its main loop. `TcpSession` stops the transport on the TCP thread, drains socket cancellations, and joins the thread before the transport or context is destroyed. The server demo tracks one active client snapshot.
+The shared [message_demo_common.hpp](../examples/message_demo_common.hpp) owns the context work guard and background threads. Each demo uses one TCP thread and calls `tcp_.client_->send(message)` directly from its main loop. The sender posts socket work internally; `fetch()` continues to synchronize incoming application data. Setup calls `client_.connect(...)` directly. `TcpSession` calls `transport_.stop()` directly, drains the internally dispatched cancellation work, and joins the thread before the transport or context is destroyed. The server demo tracks one active client snapshot.

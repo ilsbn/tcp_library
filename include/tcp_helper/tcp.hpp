@@ -45,7 +45,8 @@ public:
     virtual void on_error(std::string_view operation, ErrorCode error) = 0;
 };
 
-// All methods/destruction use the one thread running the supplied io_context.
+// send() and is_open() are thread-safe; socket writes run on the supplied io_context.
+// close() and destruction use the event thread, or run before/after it.
 class TcpConnection final : public IMessageSender
 {
 public:
@@ -67,6 +68,8 @@ private:
     std::shared_ptr<detail::ConnectionState> state_;
 };
 
+// connect(), stop(), and destruction dispatch transport work to the single io_context thread.
+// Off-thread stop() requests cancellation; keep running/polling the context to drain it.
 class TcpClient final
 {
 public:
@@ -101,6 +104,7 @@ public:
     // Numeric IPv4/IPv6 address. Port zero chooses an available port.
     // Returns setup errors synchronously; each instance starts once.
     [[nodiscard]] TCP_HELPER_API ErrorCode start(std::string_view address, std::uint16_t port);
+    // May be called from any thread. Off-thread calls queue cancellation on the io_context.
     TCP_HELPER_API void stop();
     [[nodiscard]] TCP_HELPER_API std::uint16_t port() const;
 

@@ -1,5 +1,6 @@
 #include "connection_state.hpp"
 #include "typed_events.hpp"
+#include <boost/asio/dispatch.hpp>
 #include <spdlog/spdlog.h>
 #include <functional>
 #include <map>
@@ -11,7 +12,7 @@ class ServerState final : public ConnectionOwner, public std::enable_shared_from
 {
 public:
     ServerState(boost::asio::io_context& context, std::shared_ptr<RawTcpEvents> events, TcpOptions options)
-        : acceptor_(context), events_(events), options_(options)
+        : acceptor_(context), executor_(acceptor_.get_executor()), events_(events), options_(options)
     {
         validate_configuration(events, options);
     }
@@ -24,7 +25,7 @@ public:
 
     ErrorCode start(std::string_view address, std::uint16_t port)
     {
-        if (started_ || stopped_)
+        if (started_ || stop_requested_)
         {
             return boost::asio::error::already_started;
         }
@@ -61,6 +62,24 @@ public:
 
     void stop()
     {
+        if (!stop_requested_.exchange(true))
+        {
+            boost::asio::dispatch(executor_, std::bind(&ServerState::on_stop, shared_from_this()));
+        }
+    }
+
+    std::uint16_t port() const
+    {
+        return port_;
+    }
+    void on_connection_closed(TcpConnection* connection) override
+    {
+        connections_.erase(connection);
+    }
+
+private:
+    void on_stop()
+    {
         if (stopped_)
         {
             return;
@@ -78,16 +97,6 @@ public:
         }
     }
 
-    std::uint16_t port() const
-    {
-        return port_;
-    }
-    void on_connection_closed(TcpConnection* connection) override
-    {
-        connections_.erase(connection);
-    }
-
-private:
     void accept_next()
     {
         acceptor_.async_accept(
@@ -96,7 +105,7 @@ private:
 
     void on_accepted(ErrorCode error, boost::asio::ip::tcp::socket socket)
     {
-        if (stopped_)
+        if (stop_requested_)
         {
             return;
         }
@@ -121,6 +130,7 @@ private:
     }
 
     boost::asio::ip::tcp::acceptor acceptor_;
+    const boost::asio::ip::tcp::acceptor::executor_type executor_;
     std::weak_ptr<RawTcpEvents> events_;
     // Survives callback-driven public-server destruction, including accept-error shutdown.
     // The adapter itself holds only a weak reference to the application observer.
@@ -129,6 +139,7 @@ private:
     std::map<TcpConnection*, ConnectionPtr> connections_;
     std::uint16_t port_ = 0;
     bool started_ = false;
+    std::atomic<bool> stop_requested_ = false;
     bool stopped_ = false;
 };
 

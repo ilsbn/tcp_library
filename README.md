@@ -52,7 +52,7 @@ The server binds to loopback by default. Press Ctrl+C to stop it. Port `0` selec
 The message demo is split into [message_demo_server.cpp](examples/message_demo_server.cpp) and [message_demo_client.cpp](examples/message_demo_client.cpp). Start the server in one terminal:
 
 ```powershell
-.\out\build\windows-msvc\bin\Debug\tcp_message_demo_server.exe 10101
+.\out\build\windows-msvc\bin\Debug\tcp_message_demo_server.exe
 ```
 
 Start the client in another terminal:
@@ -61,13 +61,13 @@ Start the client in another terminal:
 .\out\build\windows-msvc\bin\Debug\tcp_message_demo_client.exe 127.0.0.1 10101
 ```
 
-Both sides send a Heartbeat every second. The client sends one ShoppingCart, the server processes and echoes it, and the client verifies the returned values. Heartbeats are collected rather than echoed, so the peers do not generate an echo loop. The demos keep running until Ctrl+C; the client also exits when its server disconnects. Server port `0` selects a free port and prints `LISTENING <port>`.
+Both sides send a Heartbeat every second. The client sends one ShoppingCart, the server processes and echoes it, and the client verifies the returned values. Heartbeats are collected rather than echoed, so the peers do not generate an echo loop. The demos keep running until Ctrl+C; the client also exits when its server disconnects. The server address and port are configured in `main()` and default to `127.0.0.1:10101`.
 
 Each program follows the same polling structure: `AsioContext` runs one background TCP event thread, callbacks collect messages under a mutex in `TcpDataCollection`, and the main loop calls `fetch()` every 100 ms to retrieve a connection snapshot and clear the collected messages. Put application processing in that loop. The example server tracks one active client's snapshot. Log lines include thread IDs.
 
-The shared [message_demo_common.hpp](examples/message_demo_common.hpp) keeps context management and snapshot types consistent. Its named send handlers run on the TCP thread, so the main loop uses `context.send_heartbeat()` and `context.send_cart()` instead of calling sender methods directly. `TcpSession` stops the client/server on the TCP thread, releases the work guard, drains cancellation handlers, and joins the threads before the transport object is destroyed.
+The shared [message_demo_common.hpp](examples/message_demo_common.hpp) keeps context management and snapshot types consistent. The main loop calls `tcp_.client_->send(message)` directly. The sender encodes and reserves queue capacity synchronously, then posts the socket work to the TCP thread. Client setup calls `client_.connect(...)` directly, and `TcpSession` calls `transport_.stop()` directly during shutdown. Those methods dispatch transport work internally. The session then releases the work guard, drains cancellation handlers, and joins the threads before the transport object is destroyed.
 
-For a finite exchange, add `--once` after the server port and after the client's host and port. The client then exits after receiving a Heartbeat and matching cart reply, with a five-second deadline; the server exits after its client disconnects. With Python 3 available, CTest runs this two-process exchange and checks connection failure handling and separation of TCP callbacks from the main polling loops.
+For a finite client exchange, add `--once` after the client's host and port. The client then exits after receiving a Heartbeat and matching cart reply, with a five-second deadline; the server keeps running. With Python 3 available, CTest runs this two-process exchange, verifies disconnection, and stops the server process. It also checks connection failure handling and separation of TCP callbacks from the main polling loops.
 
 ## Typed API and ownership
 
@@ -124,12 +124,12 @@ context.run();
 
 The [application echo handler](examples/echo_message_events.hpp) uses only the message interface. See the complete [server](examples/echo_server.cpp), [client](examples/echo_client.cpp), and polling message demo [server](examples/message_demo_server.cpp)/[client](examples/message_demo_client.cpp) for transport setup, shutdown, and timeouts. The [mock sender test](tests/message_channel_tests.cpp) compiles and tests the application interface without TCP headers.
 
-- Run **one thread** in the TCP `io_context`. Call sender methods and destroy client/server objects on that thread, or before/after it runs. From another thread, use `boost::asio::post` with a named member handler, as shown in the message demos. Keep the context alive until all clients, servers, and retained senders have been destroyed.
+- Run **one thread** in the TCP `io_context`. Sender `send()` and `is_open()`, client `connect()`/`stop()`, and server `stop()` may be called from other threads. Sends reserve capacity under a mutex; connect and stop dispatch transport work internally. Server `start()`/`port()` remain synchronous setup operations and must not overlap another lifecycle call. Sender `close()` uses the TCP thread, or runs before/after it. Client/server destruction requests stop; drain the context before destroying it, and keep it alive until all retained senders have been destroyed.
 - Retain your shared `MessageEvents` object while you want callbacks. The library holds a weak reference so retaining a sender in a handler does not create a cycle. Callbacks must return promptly and must not throw.
 - Each client/server starts once. Create another instance to reconnect or restart. A second start/connect is rejected. `stop()` and `close()` are idempotent.
 - `on_connected` supplies a shared sender. The client/server retains active connections; asynchronous work retains its state until completion. `on_disconnected` reports one terminal reason per connection, including local close. Typed callbacks use `std::error_code`; resolve/connect failures arrive through `on_error`. Bind/listen setup errors return directly from `start()` as `boost::system::error_code`.
-- `stop()` cancels pending operations and closes established connections. Continue running/polling the context to drain cancellation completions before destroying it. Some callbacks, including local disconnection, run synchronously during `close()`/`stop()`.
-- A true `send()` result means queued, not acknowledged by the peer. False means closed, encoded size exceeds the configured limit, or the queue is full; no partial message is queued. Encoding may throw for allocation failure or an unrepresentable wire length.
+- `stop()` cancels pending operations and closes established connections. From another thread it queues cancellation and returns without waiting; continue running/polling the context to process that request and drain its completions before destroying it. On the TCP thread, `stop()` takes effect immediately and can synchronously invoke disconnection callbacks, as can `close()`.
+- A true `send()` result means queued, not acknowledged by the peer. False means closed, encoded size exceeds the configured limit, or the queue is full; no partial message is queued. The queue limit includes messages waiting for the TCP thread and bytes awaiting write completion. Encoding or posting may throw for allocation failure or an unrepresentable wire length.
 - The typed receiver validates messages before dispatch. Invalid data is logged and skipped; the connection stays open while the receiver searches for the next valid message. Socket errors, peer closure, and explicit `close()`/`stop()` still terminate connections.
 
 For custom byte protocols, implement `RawTcpEvents` and use the matching client/server constructor. Its `on_message(ConnectionPtr, DataBuffer)` callback and `TcpConnection::send(DataBuffer)` retain the low-level buffer API and Boost error codes. Raw observers perform their own application-protocol validation.
@@ -224,7 +224,7 @@ auto decoded = decode_message(encoded);
 const auto& received_cart = std::get<ShoppingCart>(decoded.m_body);
 ```
 
-Application code calls `sender->send(heartbeat)` or `sender->send(cart)` on the TCP thread. The library encodes, computes the checksum, verifies incoming packets, and dispatches `on_heartbeat` or `on_shopping_cart`. The message demo [server](examples/message_demo_server.cpp) and [client](examples/message_demo_client.cpp) use named class callbacks without manual encoding/decoding. The standalone codec functions above remain available for file storage, diagnostics, and raw protocol tools.
+Application code calls `sender->send(heartbeat)` or `sender->send(cart)` from its application thread or a TCP callback. The library encodes, computes the checksum, posts outgoing socket work to the TCP thread, verifies incoming packets, and dispatches `on_heartbeat` or `on_shopping_cart`. The message demo [server](examples/message_demo_server.cpp) and [client](examples/message_demo_client.cpp) use named class callbacks without manual encoding/decoding. The standalone codec functions above remain available for file storage, diagnostics, and raw protocol tools.
 
 `encode_message` builds the header and checksum automatically. `decode_message` returns a `DecodedMessage` containing `m_header`, `m_body` (`std::variant<Heartbeat, ShoppingCart>`), and verified `m_checksum`. Encoding also accepts this `MessageBody` variant, which is useful for forwarding a decoded message. Decoding examines all bytes and preserves the input buffer's read position.
 
