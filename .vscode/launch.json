@@ -1,0 +1,65 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "TCP: message demo server (Debug)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/out/build/windows-msvc/bin/Debug/tcp_message_demo_server.exe",
+            "args": ["10101"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "CMake: build Debug"
+        },
+        {
+            "name": "TCP: message demo client (Debug)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/out/build/windows-msvc/bin/Debug/tcp_message_demo_client.exe",
+            "args": ["127.0.0.1", "10101"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "CMake: build Debug"
+        },
+        {
+            "name": "TCP: echo server (Debug)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/out/build/windows-msvc/bin/Debug/tcp_echo_server.exe",
+            "args": ["7777"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "CMake: build Debug"
+        },
+        {
+            "name": "TCP: echo client (Debug)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/out/build/windows-msvc/bin/Debug/tcp_echo_client.exe",
+            "args": ["127.0.0.1", "7777", "Hello from VS Code"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "CMake: build Debug"
+        },
+        {
+            "name": "TCP: smoke test (Debug)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/out/build/windows-msvc/bin/Debug/tcp_smoke_test.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "CMake: build Debug"
+        },
+        {
+            "name": "TCP: GoogleTest / GoogleMock (Debug)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/out/build/windows-msvc/bin/Debug/tcp_helper_tests.exe",
+            "args": ["--gtest_color=yes"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "CMake: build Debug"
+        }
+    ]
+}

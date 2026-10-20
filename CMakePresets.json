@@ -1,0 +1,29 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {"major": 3, "minor": 30, "patch": 0},
+  "configurePresets": [
+    {
+      "name": "windows-msvc",
+      "displayName": "MSVC x64 + vcpkg",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/out/build/windows-msvc",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_HOST_TRIPLET": "x64-windows",
+        "VCPKG_FEATURE_FLAGS": "manifests,versions",
+        "BUILD_TESTING": "ON",
+        "TCP_HELPER_BUILD_EXAMPLES": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {"name": "debug", "configurePreset": "windows-msvc", "configuration": "Debug"},
+    {"name": "release", "configurePreset": "windows-msvc", "configuration": "Release"}
+  ],
+  "testPresets": [
+    {"name": "debug", "configurePreset": "windows-msvc", "configuration": "Debug", "output": {"outputOnFailure": true}},
+    {"name": "release", "configurePreset": "windows-msvc", "configuration": "Release", "output": {"outputOnFailure": true}}
+  ]
+}

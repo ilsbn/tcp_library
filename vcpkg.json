@@ -1,0 +1,17 @@
+{
+  "name": "tcp-helper",
+  "version-semver": "0.1.0",
+  "builtin-baseline": "e03dc9b29710050cd1018bc5674688108658d327",
+  "dependencies": [
+    {"name": "boost-asio", "default-features": false},
+    "boost-crc",
+    "boost-endian",
+    "spdlog"
+  ],
+  "features": {
+    "tests": {
+      "description": "Build the GoogleTest and GoogleMock tests",
+      "dependencies": ["gtest"]
+    }
+  }
+}

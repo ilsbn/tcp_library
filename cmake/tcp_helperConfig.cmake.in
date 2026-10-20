@@ -1,0 +1,5 @@
+@PACKAGE_INIT@
+include(CMakeFindDependencyMacro)
+find_dependency(Boost @Boost_VERSION@ EXACT CONFIG COMPONENTS asio)
+include("${CMAKE_CURRENT_LIST_DIR}/tcp_helperTargets.cmake")
+check_required_components(tcp_helper)
